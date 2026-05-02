@@ -1,0 +1,1 @@
+ALTER TABLE public.site_settings ADD COLUMN IF NOT EXISTS streak_challenges_config jsonb DEFAULT '[]'::jsonb;

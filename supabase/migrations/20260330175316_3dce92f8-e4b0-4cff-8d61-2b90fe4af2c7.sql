@@ -1,0 +1,1 @@
+ALTER TABLE public.global_events ADD COLUMN IF NOT EXISTS google_maps_url text;

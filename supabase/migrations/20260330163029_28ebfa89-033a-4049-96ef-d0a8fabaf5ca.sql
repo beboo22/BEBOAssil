@@ -1,0 +1,1 @@
+ALTER TABLE public.site_settings ADD COLUMN IF NOT EXISTS financial_config jsonb DEFAULT '{"tax_rate": 15, "platform_fee_percent": 10, "currency": "SAR", "tax_name": "VAT", "tax_name_ar": "ضريبة القيمة المضافة"}'::jsonb;

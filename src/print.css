@@ -1,0 +1,170 @@
+
+@media print {
+  /* Hide everything except the printable content */
+  body * {
+    visibility: hidden;
+  }
+  
+  #printable-itinerary, 
+  #printable-itinerary * {
+    visibility: visible !important;
+  }
+  
+  #printable-itinerary {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+  }
+  
+  /* Page breaks for days */
+  .page-break-after {
+    page-break-after: always;
+  }
+  
+  .page-break-inside-avoid {
+    page-break-inside: avoid;
+  }
+  
+  /* Font adjustments for print */
+  body {
+    font-size: 12pt;
+  }
+  
+  h1 {
+    font-size: 18pt;
+  }
+  
+  h2 {
+    font-size: 16pt;
+  }
+  
+  h3 {
+    font-size: 14pt;
+  }
+  
+  /* Control dimensions better for printing */
+  .print-card {
+    border: 1px solid #ddd;
+    padding: 10px;
+    margin-bottom: 15px;
+  }
+  
+  /* Fix QR code rendering */
+  svg, img {
+    display: inline-block !important;
+    max-width: 100% !important;
+    page-break-inside: avoid !important;
+    visibility: visible !important;
+  }
+  
+  /* Ensure QR codes are visible with proper dimensions */
+  svg[data-testid="qr-code"],
+  [data-testid="qr-code"] svg {
+    width: 120px !important;
+    height: 120px !important;
+    display: block !important;
+    margin: 8px auto !important;
+    color: black !important;
+    background-color: white !important;
+    visibility: visible !important;
+    transform-origin: center !important;
+    transform: scale(1) !important;
+  }
+  
+  /* QR code specific rendering */
+  svg[width="70"], svg[width="60"], svg[width="100"], svg[width="150"] {
+    width: 120px !important;
+    height: 120px !important;
+    display: block !important;
+    margin: 8px auto !important;
+  }
+  
+  /* Ensure backgrounds and colors print properly */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    color-adjust: exact !important;
+  }
+  
+  /* Ensure QR code paths are black */
+  svg path {
+    fill: black !important;
+  }
+  
+  /* Explicitly set elements to block to ensure correct rendering */
+  div, p, h1, h2, h3, h4, h5, h6 {
+    display: block !important;
+  }
+  
+  /* Ensure QR code containers are visible */
+  div:has(> svg[data-testid="qr-code"]) {
+    visibility: visible !important;
+    display: block !important;
+  }
+  
+  /* Fix for QR code rendering in PDF */
+  div[data-testid="qr-code-container"],
+  div:has(> svg) {
+    visibility: visible !important;
+    display: block !important;
+    margin: 8px auto !important;
+  }
+  
+  svg, svg * {
+    visibility: visible !important;
+  }
+  
+  /* Make sure all content is visible. Avoid forcing page-break-before on every
+     child — it created half-empty pages. Only force page break BEFORE day sections,
+     and let large sections flow naturally while keeping inner cards intact. */
+  #printable-itinerary > div {
+    display: block !important;
+    visibility: visible !important;
+  }
+
+  /* Day sections start on a new page (except the very first one) */
+  #printable-itinerary [data-pdf-day-section] {
+    page-break-before: always !important;
+    break-before: page !important;
+  }
+  #printable-itinerary [data-pdf-day-section]:first-of-type {
+    page-break-before: auto !important;
+    break-before: auto !important;
+  }
+
+  /* Keep individual activity / info cards from being split across pages */
+  #printable-itinerary [data-pdf-activity],
+  #printable-itinerary [data-pdf-card],
+  #printable-itinerary [data-pdf-section] {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+    -webkit-column-break-inside: avoid !important;
+    display: block !important;
+  }
+
+  /* Activity cards: ensure inner flex row doesn't get split */
+  #printable-itinerary [data-pdf-activity] > div {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  /* Smaller QR codes when printing to save vertical space and avoid page splits */
+  #printable-itinerary [data-pdf-activity] svg {
+    width: 70px !important;
+    height: 70px !important;
+  }
+  
+  /* Force qr code to render properly */
+  .qrcode-container {
+    margin: 10px auto !important;
+    width: 100px !important;
+    height: 100px !important;
+    display: block !important;
+  }
+  
+  .qrcode-container svg {
+    width: 100% !important;
+    height: 100% !important;
+  }
+}

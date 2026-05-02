@@ -1,0 +1,21 @@
+User-agent: Googlebot
+Allow: /
+Disallow: /admin
+Disallow: /profile
+Disallow: /calendar/add
+Crawl-delay: 1
+
+User-agent: Bingbot
+Allow: /
+Disallow: /admin
+Disallow: /profile
+Disallow: /calendar/add
+Crawl-delay: 2
+
+User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /profile
+Disallow: /calendar/add
+
+Sitemap: https://aseelaitrip.com/sitemap.xml

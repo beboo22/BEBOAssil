@@ -1,0 +1,1 @@
+ALTER TABLE public.subscription_plans ADD COLUMN IF NOT EXISTS max_activities_per_day integer NOT NULL DEFAULT 7;

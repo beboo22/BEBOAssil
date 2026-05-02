@@ -1,0 +1,1 @@
+ALTER TABLE public.subscription_plans ADD COLUMN max_total_activities integer NOT NULL DEFAULT 0;

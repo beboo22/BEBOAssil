@@ -1,0 +1,1 @@
+ALTER TABLE public.site_settings ALTER COLUMN guest_generation_enabled SET DEFAULT false;

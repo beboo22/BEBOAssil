@@ -1,0 +1,1 @@
+ALTER TABLE public.site_settings ADD COLUMN IF NOT EXISTS nav_order jsonb DEFAULT '["home","destinations","planner","promotions","bookings","flights","hotels","cars","my-trips","stories","story-explorer","stories-map","memories","reels","events","saved-bookings","pricing","wallet"]'::jsonb;

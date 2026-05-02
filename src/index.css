@@ -1,0 +1,397 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer utilities {
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* Force Western (latn) numerals on time/date inputs */
+input[type="time"],
+input[type="date"],
+input[type="datetime-local"],
+input[type="number"] {
+  font-variant-numeric: tabular-nums;
+}
+input[type="time"]::-webkit-datetime-edit,
+input[type="date"]::-webkit-datetime-edit,
+input[type="datetime-local"]::-webkit-datetime-edit {
+  font-variant-numeric: tabular-nums;
+}
+
+@layer base {
+  :root {
+    --background: 40 20% 98%;
+    --foreground: 220 25% 10%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 220 25% 10%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 25% 10%;
+
+    --primary: 174 62% 40%;
+    --primary-foreground: 0 0% 100%;
+    --primary-glow: 174 70% 55%;
+
+    --secondary: 40 30% 95%;
+    --secondary-foreground: 220 25% 15%;
+
+    --muted: 40 15% 94%;
+    --muted-foreground: 220 10% 50%;
+
+    --accent: 24 90% 58%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 40 15% 90%;
+    --input: 40 15% 90%;
+    --ring: 174 62% 40%;
+
+    --success: 152 60% 42%;
+    --warning: 38 92% 50%;
+    --info: 210 80% 55%;
+
+    --gradient-primary: linear-gradient(135deg, hsl(174 62% 40%), hsl(174 70% 55%));
+    --gradient-hero: linear-gradient(135deg, hsl(174 62% 35%), hsl(200 70% 30%), hsl(220 60% 25%));
+    --gradient-warm: linear-gradient(135deg, hsl(24 90% 58%), hsl(38 92% 50%));
+    --gradient-subtle: linear-gradient(135deg, hsl(40 20% 98%), hsl(40 30% 95%));
+
+    --shadow-elegant: 0 10px 40px -12px hsl(174 62% 40% / 0.25);
+    --shadow-warm: 0 10px 40px -12px hsl(24 90% 58% / 0.25);
+    --shadow-soft: 0 4px 20px -4px hsl(220 25% 10% / 0.08);
+
+    --radius: 0.75rem;
+
+    --travel-blue: 174 62% 40%;
+    --travel-blue-dark: 174 65% 30%;
+    --travel-blue-light: 174 60% 75%;
+    --travel-blue-bg: 174 50% 95%;
+    --travel-white: 0 0% 100%;
+    --travel-gray: 40 15% 97%;
+    --travel-gray-dark: 220 13% 82%;
+    --travel-black: 220 25% 10%;
+    --travel-text-secondary: 220 10% 50%;
+
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 240 5.3% 26.1%;
+    --sidebar-primary: 174 62% 40%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 40 30% 95%;
+    --sidebar-accent-foreground: 220 25% 15%;
+    --sidebar-border: 40 15% 90%;
+    --sidebar-ring: 174 62% 40%;
+  }
+
+  .dark {
+    --background: 220 20% 7%;
+    --foreground: 40 20% 95%;
+
+    --card: 220 18% 10%;
+    --card-foreground: 40 20% 95%;
+
+    --popover: 220 18% 10%;
+    --popover-foreground: 40 20% 95%;
+
+    --primary: 174 65% 50%;
+    --primary-foreground: 220 25% 8%;
+    --primary-glow: 174 70% 65%;
+
+    --secondary: 220 15% 15%;
+    --secondary-foreground: 40 20% 90%;
+
+    --muted: 220 15% 15%;
+    --muted-foreground: 220 10% 55%;
+
+    --accent: 24 85% 60%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 62% 40%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 15% 18%;
+    --input: 220 15% 18%;
+    --ring: 174 65% 50%;
+
+    --success: 152 55% 48%;
+    --warning: 38 85% 55%;
+    --info: 210 75% 60%;
+
+    --gradient-primary: linear-gradient(135deg, hsl(174 65% 50%), hsl(174 70% 65%));
+    --gradient-hero: linear-gradient(135deg, hsl(174 65% 40%), hsl(200 60% 25%), hsl(220 50% 18%));
+    --gradient-warm: linear-gradient(135deg, hsl(24 85% 60%), hsl(38 85% 55%));
+    --gradient-subtle: linear-gradient(135deg, hsl(220 20% 7%), hsl(220 15% 12%));
+
+    --shadow-elegant: 0 10px 40px -12px hsl(174 65% 50% / 0.3);
+    --shadow-warm: 0 10px 40px -12px hsl(24 85% 60% / 0.3);
+    --shadow-soft: 0 4px 20px -4px hsl(0 0% 0% / 0.3);
+
+    --travel-blue: 174 65% 55%;
+    --travel-blue-dark: 174 60% 40%;
+    --travel-blue-light: 174 55% 70%;
+    --travel-blue-bg: 174 40% 12%;
+    --travel-white: 0 0% 100%;
+    --travel-gray: 220 15% 12%;
+    --travel-gray-dark: 220 12% 25%;
+    --travel-black: 40 20% 95%;
+    --travel-text-secondary: 220 10% 55%;
+
+    --sidebar-background: 220 18% 10%;
+    --sidebar-foreground: 40 20% 95%;
+    --sidebar-primary: 174 65% 50%;
+    --sidebar-primary-foreground: 220 25% 8%;
+    --sidebar-accent: 220 15% 15%;
+    --sidebar-accent-foreground: 40 20% 90%;
+    --sidebar-border: 220 15% 18%;
+    --sidebar-ring: 174 65% 50%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+}
+
+@layer components {
+  .section-container {
+    @apply max-w-7xl mx-auto px-4 sm:px-6 lg:px-8;
+  }
+
+  .text-gradient {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-primary to-accent;
+  }
+
+  .gradient-text {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-primary to-accent;
+  }
+
+  .glass-card {
+    @apply bg-card/80 backdrop-blur-xl border border-border/50 shadow-lg;
+  }
+
+  .card-hover {
+    @apply transition-all duration-300 hover:shadow-xl hover:-translate-y-1;
+  }
+
+  .modern-button {
+    @apply bg-gradient-to-r from-primary to-primary-glow text-primary-foreground font-semibold px-8 py-4 rounded-2xl shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 transition-all duration-300;
+  }
+
+  .hero-container {
+    @apply relative overflow-hidden text-white pt-16 pb-24 sm:pt-24 sm:pb-32;
+  }
+
+  .glassmorphism {
+    @apply bg-card/90 backdrop-blur-md border border-border/50 shadow-lg;
+  }
+
+  .input-travel {
+    @apply bg-card border border-border rounded-lg px-4 py-3 text-foreground focus:ring-2 focus:ring-primary focus:border-transparent transition-all duration-200 outline-none w-full;
+  }
+
+  .trip-card {
+    @apply bg-card p-6 rounded-xl shadow-sm hover:shadow-md transition-shadow duration-200 border border-border;
+  }
+
+  .button-travel {
+    @apply bg-primary text-primary-foreground font-medium px-6 py-3 rounded-lg hover:bg-primary/90 transition-colors duration-200 focus:ring-2 focus:ring-primary focus:ring-offset-2 inline-flex items-center justify-center gap-2;
+  }
+
+  .button-travel-outline {
+    @apply bg-transparent text-primary border border-primary font-medium px-6 py-3 rounded-lg hover:bg-primary/10 transition-colors duration-200 inline-flex items-center justify-center gap-2;
+  }
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: invert(0.6);
+}
+
+.react-datepicker-wrapper {
+  width: 100%;
+}
+
+/* ============ Moyasar Payment Form — Mobile-optimized overrides ============ */
+.mysr-form {
+  width: 100% !important;
+  font-family: inherit !important;
+  color: hsl(var(--foreground)) !important;
+  overflow: visible !important;
+  max-height: none !important;
+}
+.mysr-form * {
+  box-sizing: border-box !important;
+  max-height: none !important;
+}
+.mysr-form input,
+.mysr-form .mysr-form-input,
+.mysr-form .mysr-form-card-input {
+  width: 100% !important;
+  background: hsl(var(--background)) !important;
+  color: hsl(var(--foreground)) !important;
+  border: 1px solid hsl(var(--border)) !important;
+  border-radius: 0.5rem !important;
+  padding: 0.625rem 0.75rem !important;
+  font-size: 16px !important; /* prevents iOS zoom-on-focus */
+  line-height: 1.3 !important;
+  min-height: 42px !important;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease !important;
+}
+.mysr-form input:focus,
+.mysr-form .mysr-form-input:focus {
+  outline: none !important;
+  border-color: hsl(var(--primary)) !important;
+  box-shadow: 0 0 0 2px hsl(var(--primary) / 0.25) !important;
+}
+.mysr-form input::placeholder {
+  color: hsl(var(--muted-foreground)) !important;
+  opacity: 0.7 !important;
+}
+.mysr-form label,
+.mysr-form .mysr-form-source-label,
+.mysr-form .mysr-form-name-label,
+.mysr-form .mysr-form-card-label {
+  color: hsl(var(--foreground)) !important;
+  font-size: 0.8125rem !important;
+  font-weight: 500 !important;
+  margin-bottom: 0.25rem !important;
+  display: block !important;
+}
+.mysr-form .mysr-form-source-separator {
+  color: hsl(var(--muted-foreground)) !important;
+  font-size: 0.75rem !important;
+  margin: 0.625rem 0 !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 0.5rem !important;
+}
+.mysr-form .mysr-form-source-separator::before,
+.mysr-form .mysr-form-source-separator::after {
+  content: "" !important;
+  flex: 1 !important;
+  height: 1px !important;
+  background: hsl(var(--border)) !important;
+}
+.mysr-form .mysr-form-card-fields,
+.mysr-form .mysr-form-card-info {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 0.5rem !important;
+}
+.mysr-form .mysr-form-row {
+  display: grid !important;
+  grid-template-columns: 1fr 1fr !important;
+  gap: 0.5rem !important;
+}
+.mysr-form .mysr-form-submit-button,
+.mysr-form button[type="submit"] {
+  width: 100% !important;
+  background: hsl(var(--primary)) !important;
+  color: hsl(var(--primary-foreground)) !important;
+  border: none !important;
+  border-radius: 0.5rem !important;
+  padding: 0.625rem 0.875rem !important;
+  font-size: 0.9375rem !important;
+  font-weight: 600 !important;
+  min-height: 44px !important;
+  margin-top: 0.625rem !important;
+  cursor: pointer !important;
+  transition: opacity 0.15s ease, transform 0.05s ease !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 0.5rem !important;
+}
+.mysr-form .mysr-form-submit-button:hover,
+.mysr-form button[type="submit"]:hover {
+  opacity: 0.92 !important;
+}
+.mysr-form .mysr-form-submit-button:active,
+.mysr-form button[type="submit"]:active {
+  transform: scale(0.99) !important;
+}
+.mysr-form .mysr-form-submit-button:disabled {
+  opacity: 0.6 !important;
+  cursor: not-allowed !important;
+}
+.mysr-form .mysr-form-applepay-button,
+.mysr-form .mysr-form-stcpay-button,
+.mysr-form .mysr-form-samsungpay-button {
+  width: 100% !important;
+  min-height: 44px !important;
+  border-radius: 0.5rem !important;
+  margin-bottom: 0.5rem !important;
+}
+.mysr-form .mysr-form-error,
+.mysr-form .mysr-error {
+  color: hsl(var(--destructive)) !important;
+  font-size: 0.8125rem !important;
+  margin-top: 0.375rem !important;
+}
+.mysr-form .mysr-form-card-networks img,
+.mysr-form .mysr-form-card-networks svg {
+  height: 20px !important;
+  width: auto !important;
+}
+@media (max-width: 480px) {
+  .mysr-form input,
+  .mysr-form .mysr-form-input {
+    padding: 0.4375rem 0.5625rem !important;
+    min-height: 36px !important;
+    border-radius: 0.4375rem !important;
+  }
+  .mysr-form .mysr-form-row {
+    gap: 0.3125rem !important;
+  }
+  .mysr-form .mysr-form-card-fields,
+  .mysr-form .mysr-form-card-info {
+    gap: 0.375rem !important;
+  }
+  .mysr-form label,
+  .mysr-form .mysr-form-source-label,
+  .mysr-form .mysr-form-name-label,
+  .mysr-form .mysr-form-card-label {
+    font-size: 0.6875rem !important;
+    margin-bottom: 0.125rem !important;
+  }
+  .mysr-form .mysr-form-submit-button,
+  .mysr-form button[type="submit"],
+  .mysr-form .mysr-form-applepay-button,
+  .mysr-form .mysr-form-stcpay-button,
+  .mysr-form .mysr-form-samsungpay-button {
+    min-height: 38px !important;
+    font-size: 0.8125rem !important;
+    margin-bottom: 0.3125rem !important;
+    margin-top: 0.375rem !important;
+    border-radius: 0.4375rem !important;
+    padding: 0.4375rem 0.625rem !important;
+  }
+  .mysr-form .mysr-form-source-separator {
+    margin: 0.375rem 0 !important;
+    font-size: 0.625rem !important;
+  }
+  .mysr-form .mysr-form-card-networks img,
+  .mysr-form .mysr-form-card-networks svg {
+    height: 14px !important;
+  }
+}

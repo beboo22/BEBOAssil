@@ -1,0 +1,1 @@
+ALTER TABLE public.comments DROP CONSTRAINT comments_user_id_fkey;

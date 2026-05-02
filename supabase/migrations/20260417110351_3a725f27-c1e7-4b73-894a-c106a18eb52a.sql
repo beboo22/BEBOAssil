@@ -1,0 +1,1 @@
+ALTER TABLE public.saved_trips ADD CONSTRAINT saved_trips_user_trip_unique UNIQUE (user_id, trip_id);
