@@ -8,6 +8,7 @@
       type PoolRotationResult,
       type CacheLookupResult,
     } from "./filterResultsCache.ts";
+    
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
@@ -3900,11 +3901,11 @@ function hasActivityInCollection(activities: any[] = [], activity: any): boolean
   });
 }
 
-function hasValidOpeningHours(value: unknown): boolean {
-  const hours = String(value || "").trim();
-  if (!hours) return false;
-  return !/(تحقق\s*من\s*ساعات\s*العمل|check\s*opening\s*hours|unknown|n\/a|غير\s*متوفر)/i.test(hours);
-}
+// function hasValidOpeningHours(value: unknown): boolean {
+//   const hours = String(value || "").trim();
+//   if (!hours) return false;
+//   return !/(تحقق\s*من\s*ساعات\s*العمل|check\s*opening\s*hours|unknown|n\/a|غير\s*متوفر)/i.test(hours);
+// }
 
 function looksGenericActivity(activity: any, destination: string): boolean {
   const destinationText = String(destination || "").toLowerCase().trim();
@@ -10397,16 +10398,7 @@ async function enrichItineraryWithBookings(
 }
 
 // أضف هذا السطر في أعلى الملف مع باقي الـ imports
-import {
-  buildCacheIdentifiers,  // still exported; used nowhere in this file but kept for external callers
-  canonicalJson,           // still exported; used in places_cache key building
-  cryptoShuffle,           // used in local helpers below
-  resolveWithCache,
-  type Filters,
-  type PoolRotationResult,
-  // Backward-compat alias — old code that imported CacheLookupResult still compiles
-  type CacheLookupResult,
-} from "./filterResultsCache.ts";
+
 
 
 // ════════════════════════════════════════════════════════════════════════════
