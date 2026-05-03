@@ -154,111 +154,86 @@ function normalizeHotelEntry(h: any) {
   };
 }
 
+function getUserIdFromAuthHeader(authHeader: string | null): string | null {
+  try {
+    if (!authHeader?.startsWith("Bearer ")) return null;
+    const token = authHeader.replace("Bearer ", "");
+    const payload = JSON.parse(atob(token.split(".")[1] || ""));
+    return payload?.sub || null;
+  } catch { return null; }
+}
+import { 
+  resolveWithCache, 
+  type Filters, 
+  type PoolRotationResult 
+} from "../generate-trip/filterResultsCache.ts"; // تأكد من صحة المسار
+
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
-  }
+  if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    // Plan gating (server-side defense in depth)
+    // 1. التحقق من صلاحية وصول المستخدم بناءً على خطته[cite: 15]
     const access = await checkSerpapiHotelsAccess(req);
     if (!access.allowed) {
-      console.log("serpapi-hotels blocked:", access.reason);
-      return new Response(
-        JSON.stringify({
-          success: false,
-          plan_blocked: true,
-          error: access.reason || "SerpAPI hotels are not enabled for your plan",
-          hotels: [],
-        }),
-        { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return new Response(JSON.stringify({ success: false, error: access.reason }), { status: 403, headers: corsHeaders });
     }
 
-    const SERPAPI_KEY = Deno.env.get("SERPAPI_KEY");
-    const { query, check_in_date, check_out_date, adults, children, currency, sort_by, max_price, min_price, hotel_class, property_types, vacation_rentals } = await req.json();
+    const requestData = await req.json();
+    const { query, check_in_date, check_out_date, adults, children, currency } = requestData;
+    const authHeader = req.headers.get("authorization");
+    const currentUserId = getUserIdFromAuthHeader(authHeader);
 
-    if (!query || !check_in_date || !check_out_date) {
-      return new Response(
-        JSON.stringify({ success: false, error: "query, check_in_date, and check_out_date are required" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
+    // 2. تجهيز الفلاتر الموحدة لمفتاح الكاش
+    const hotelFilters: Filters = {
+      query: query.toLowerCase().trim(),
+      dates: { check_in: check_in_date, check_out: check_out_date },
+      guests: { adults: adults || 2, children: children || 0 },
+      currency: currency || "USD"
+    };
 
-    let hotels: any[] = [];
-    let source = "serpapi";
-
-    // Try SerpAPI first
-    if (SERPAPI_KEY) {
-      let url = `https://serpapi.com/search.json?engine=google_hotels&q=${encodeURIComponent(query)}&check_in_date=${check_in_date}&check_out_date=${check_out_date}&currency=${currency || "USD"}&hl=en&gl=us&api_key=${SERPAPI_KEY}`;
-      if (adults) url += `&adults=${adults}`;
-      if (children) url += `&children=${children}`;
-      if (sort_by) url += `&sort_by=${sort_by}`;
-      if (max_price && Number(max_price) > 0) url += `&max_price=${Number(max_price)}`;
-      if (min_price && Number(min_price) > 0) url += `&min_price=${Number(min_price)}`;
-      if (hotel_class) url += `&hotel_class=${encodeURIComponent(String(hotel_class))}`;
-      if (property_types) url += `&property_types=${encodeURIComponent(String(property_types))}`;
-      if (vacation_rentals) url += `&vacation_rentals=true`;
-
-      console.log("Searching hotels via SerpAPI:", query, check_in_date, "to", check_out_date);
+    // 3. تعريف كيف نجلب بيانات جديدة إذا لم نجدها في الكاش[cite: 15]
+    const fetchFreshPool = async () => {
+      const SERPAPI_KEY = Deno.env.get("SERPAPI_KEY");
+      let url = `https://serpapi.com/search.json?engine=google_hotels&q=${encodeURIComponent(query)}&check_in_date=${check_in_date}&check_out_date=${check_out_date}&currency=${currency || "USD"}&api_key=${SERPAPI_KEY}`;
+      
       const response = await fetch(url);
+      if (!response.ok) throw new Error("SerpAPI call failed");
+      
+      const data = await response.json();
+      const rawPool = [...(data.ads || []), ...(data.properties || [])];
+      // نرجع الـ 25 عنصر كاملة ليتم تخزينها في الـ Pool
+      return rawPool.map(h => normalizeHotelEntry(h));
+    };
 
-      if (response.ok) {
-        const data = await response.json();
-        const seen = new Set<string>();
-        hotels = [...(data.ads || []), ...(data.properties || [])]
-          .map((h: any) => normalizeHotelEntry(h))
-          .filter((h: any) => {
-            const key = h.property_token || `${h.name}-${h.link}-${h.rate_per_night}`;
-            if (!key || seen.has(key)) return false;
-            seen.add(key);
-            return true;
-          });
+    // 4. استدعاء نظام الكاش (التدوير + الـ 5 عناصر + الترتيب العشوائي)
+    let hotelsToShow;
+    let source = "fresh";
 
-        return new Response(
-          JSON.stringify({
-            success: true,
-            hotels,
-            total_results: data?.search_information?.total_results || hotels.length,
-            brands: data?.brands || [],
-            source,
-            quota_exhausted: false,
-          }),
-          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      } else {
-        console.warn("SerpAPI hotels failed:", response.status, "- falling back to Serper.dev");
-        source = "serper";
-      }
+    if (currentUserId) {
+      const cacheResult = await resolveWithCache(
+        hotelFilters,
+        currentUserId,
+        fetchFreshPool
+      );
+      hotelsToShow = cacheResult.data || [];
+      source = cacheResult.source;
     } else {
-      source = "serper";
+      hotelsToShow = await fetchFreshPool();
     }
 
-    // Fallback to Serper.dev
-    if (hotels.length === 0) {
-      console.log("Falling back to Serper.dev for hotels...");
-      source = "serper";
-      hotels = await searchHotelsWithSerper(query);
-    }
-
-    console.log(`Found ${hotels.length} hotels via ${source}`);
-
+    // 5. الرد النهائي بالنتائج (5 فنادق فريدة ومرتبة عشوائياً)[cite: 10, 15]
     return new Response(
       JSON.stringify({
         success: true,
-        hotels,
-        total_results: hotels.length,
-        brands: [],
-        source,
-        quota_exhausted: source === "serper",
+        hotels: hotelsToShow,
+        source: source,
+        reused_from_cache: source === "cross_user_cache"
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
+
   } catch (error) {
-    console.error("serpapi-hotels error:", error);
-    return new Response(
-      JSON.stringify({ success: false, error: error instanceof Error ? error.message : "Failed" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    console.error("Error:", error);
+    return new Response(JSON.stringify({ success: false, error: error.message }), { status: 500, headers: corsHeaders });
   }
 });

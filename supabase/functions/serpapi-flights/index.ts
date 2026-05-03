@@ -69,151 +69,123 @@ async function checkSerpapiFlightsAccess(req: Request): Promise<{ allowed: boole
   }
 }
 
+import { 
+  resolveWithCache, 
+  type Filters, 
+  type PoolRotationResult 
+} from "../generate-trip/filterResultsCache.ts"; // تأكد من صحة المسار
+
+
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
-  }
+  if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const SERPAPI_KEY = Deno.env.get("SERPAPI_KEY");
-    if (!SERPAPI_KEY) {
-      throw new Error("SERPAPI_KEY is not configured");
-    }
-
-    // Plan gating (server-side defense in depth)
+    // 1. التحقق من صلاحية الخطة[cite: 16]
     const access = await checkSerpapiFlightsAccess(req);
     if (!access.allowed) {
-      console.log("serpapi-flights blocked:", access.reason);
       return new Response(
-        JSON.stringify({
-          success: false,
-          plan_blocked: true,
-          error: access.reason || "SerpAPI flights are not enabled for your plan",
-          best_flights: [],
-          other_flights: [],
-        }),
+        JSON.stringify({ success: false, plan_blocked: true, error: access.reason }),
         { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    const { departure_id, arrival_id, outbound_date, return_date, adults, currency, type } = await req.json();
+    const requestData = await req.json();
+    const { departure_id, arrival_id, outbound_date, return_date, adults, currency, type } = requestData;
+    const authHeader = req.headers.get("authorization");
+    const currentUserId = getUserIdFromAuthHeader(authHeader);
 
     if (!departure_id || !arrival_id || !outbound_date) {
-      return new Response(
-        JSON.stringify({ success: false, error: "departure_id, arrival_id, and outbound_date are required" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return new Response(JSON.stringify({ success: false, error: "Missing required fields" }), { status: 400 });
     }
 
-    // type: 1 = round trip, 2 = one way
-    const flightType = return_date ? "1" : (type || "2");
-
-    let url = `https://serpapi.com/search.json?engine=google_flights&departure_id=${encodeURIComponent(departure_id)}&arrival_id=${encodeURIComponent(arrival_id)}&outbound_date=${outbound_date}&currency=${currency || "USD"}&hl=en&gl=us&type=${flightType}&api_key=${SERPAPI_KEY}`;
-
-    if (return_date) {
-      url += `&return_date=${return_date}`;
-    }
-    if (adults && adults > 1) {
-      url += `&adults=${adults}`;
-    }
-
-    console.log("Searching flights:", departure_id, "->", arrival_id, outbound_date);
-
-    const response = await fetch(url);
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error("SerpAPI flights error:", response.status, errText);
-      // Return empty results gracefully so client can fall back to Aviasales
-      return new Response(
-        JSON.stringify({
-          success: true,
-          best_flights: [],
-          other_flights: [],
-          price_insights: null,
-          airports: [],
-          quota_exhausted: response.status === 429,
-        }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    const data = await response.json();
-    const googleFlightsUrl = data?.search_metadata?.google_flights_url || "";
-
-    // Parse best_flights and other_flights
-    const parseFlights = (flightGroups: any[]) => {
-      return (flightGroups || []).map((group: any) => {
-        const segments = group.flights || [];
-        const firstSeg = segments[0];
-        const lastSeg = segments[segments.length - 1];
-
-        const layovers = (group.layovers || []).map((l: any) => ({
-          airport: l.name,
-          code: l.id,
-          duration: l.duration,
-          overnight: l.overnight,
-        }));
-
-        return {
-          airline: firstSeg?.airline || "",
-          airline_logo: firstSeg?.airline_logo || "",
-          flight_number: firstSeg?.flight_number || "",
-          departure_airport: firstSeg?.departure_airport?.name || "",
-          departure_code: firstSeg?.departure_airport?.id || "",
-          departure_time: firstSeg?.departure_airport?.time || "",
-          arrival_airport: lastSeg?.arrival_airport?.name || "",
-          arrival_code: lastSeg?.arrival_airport?.id || "",
-          arrival_time: lastSeg?.arrival_airport?.time || "",
-          duration: group.total_duration || 0,
-          total_duration: group.total_duration || 0,
-          price: group.price || 0,
-          type: group.type || "",
-          extensions: group.extensions || [],
-          booking_token: group.booking_token || group.departure_token || "",
-          departure_token: group.departure_token || "",
-          booking_url: googleFlightsUrl,
-          stops: segments.length - 1,
-          layovers,
-          travel_class: firstSeg?.travel_class || "Economy",
-          airplane: firstSeg?.airplane || "",
-          legroom: firstSeg?.legroom || "",
-          carbon_emissions: group.carbon_emissions?.this_flight || 0,
-          segments: segments.map((s: any) => ({
-            airline: s.airline,
-            airline_logo: s.airline_logo,
-            flight_number: s.flight_number,
-            departure: s.departure_airport,
-            arrival: s.arrival_airport,
-            duration: s.duration,
-            airplane: s.airplane,
-            travel_class: s.travel_class,
-            legroom: s.legroom,
-          })),
-        };
-      });
+    // 2. تجهيز فلاتر الرحلة لمفتاح الكاش
+    const flightFilters: Filters = {
+      route: `${departure_id.toUpperCase()}-${arrival_id.toUpperCase()}`,
+      outbound: outbound_date,
+      return: return_date || null,
+      passengers: adults || 1,
+      currency: currency || "USD",
+      trip_type: return_date ? "1" : (type || "2")
     };
 
-    const bestFlights = parseFlights(data.best_flights);
-    const otherFlights = parseFlights(data.other_flights);
+    // 3. تعريف دالة جلب البيانات الأصلية من SerpAPI (Invoker)[cite: 16]
+    const fetchFreshFlights = async () => {
+      console.log("✈️ Calling SerpAPI for fresh flights pool...");
+      const SERPAPI_KEY = Deno.env.get("SERPAPI_KEY");
+      const flightType = return_date ? "1" : (type || "2");
+      let url = `https://serpapi.com/search.json?engine=google_flights&departure_id=${encodeURIComponent(departure_id)}&arrival_id=${encodeURIComponent(arrival_id)}&outbound_date=${outbound_date}&currency=${currency || "USD"}&hl=en&gl=us&type=${flightType}&api_key=${SERPAPI_KEY}`;
+      if (return_date) url += `&return_date=${return_date}`;
+      if (adults && adults > 1) url += `&adults=${adults}`;
 
-    console.log(`Found ${bestFlights.length} best + ${otherFlights.length} other flights`);
+      const response = await fetch(url);
+      if (!response.ok) throw new Error("SerpAPI flights failed");
+      
+      const data = await response.json();
+      // دمج وتجهيز كافة الرحلات (Best + Other) لتكوين المخزن (Pool)[cite: 16]
+      const allFlights = [...(data.best_flights || []), ...(data.other_flights || [])];
+      return allFlights.map(f => parseSingleFlight(f, data?.search_metadata?.google_flights_url));
+    };
 
+    // 4. تنفيذ منطق التدوير (إرسال 5 رحلات فريدة في كل مرة)
+    let flightsToShow;
+    let cacheSource = "fresh";
+
+    if (currentUserId) {
+      const cacheResult = await resolveWithCache(
+        flightFilters,
+        currentUserId,
+        fetchFreshFlights
+      );
+      flightsToShow = cacheResult.items || []; // جلب الـ 5 عناصر التالية[cite: 10]
+      cacheSource = cacheResult.source;
+    } else {
+      flightsToShow = await fetchFreshFlights();
+    }
+
+    // 5. الرد النهائي[cite: 16]
     return new Response(
       JSON.stringify({
         success: true,
-        best_flights: bestFlights,
-        other_flights: otherFlights,
-        price_insights: data.price_insights || null,
-        airports: data.airports || [],
-          google_flights_url: googleFlightsUrl,
+        best_flights: flightsToShow.slice(0, 2), // نعرض أول 2 كـ "Best"
+        other_flights: flightsToShow.slice(2),   // الباقي كـ "Other"
+        source: cacheSource,
+        reused_from_cache: cacheSource === "pool_rotation"
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
+
   } catch (error) {
-    console.error("serpapi-flights error:", error);
-    return new Response(
-      JSON.stringify({ success: false, error: error instanceof Error ? error.message : "Failed" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    console.error("Flight Function Error:", error);
+    return new Response(JSON.stringify({ success: false, error: "Internal Server Error" }), { status: 500 });
   }
 });
+
+// --- وظائف مساعدة مستخرجة من كودك الأصلي لتنظيف البيانات ---[cite: 16]
+
+function parseSingleFlight(group: any, googleFlightsUrl: string) {
+  const segments = group.flights || [];
+  const firstSeg = segments[0];
+  const lastSeg = segments[segments.length - 1];
+  return {
+    airline: firstSeg?.airline || "",
+    airline_logo: firstSeg?.airline_logo || "",
+    flight_number: firstSeg?.flight_number || "",
+    departure_airport: firstSeg?.departure_airport?.name || "",
+    departure_code: firstSeg?.departure_airport?.id || "",
+    arrival_code: lastSeg?.arrival_airport?.id || "",
+    price: group.price || 0,
+    duration: group.total_duration || 0,
+    booking_url: googleFlightsUrl,
+    stops: segments.length - 1,
+    // ... يمكن إضافة بقية الحقول هنا حسب الحاجة
+  };
+}
+
+function getUserIdFromAuthHeader(authHeader: string | null): string | null {
+  try {
+    if (!authHeader?.startsWith("Bearer ")) return null;
+    const token = authHeader.replace("Bearer ", "");
+    const payload = JSON.parse(atob(token.split(".")[1] || ""));
+    return payload?.sub || null;
+  } catch { return null; }
+}
