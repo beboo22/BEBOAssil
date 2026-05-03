@@ -1,5 +1,13 @@
 // Using built-in Deno.serve (no import needed)
-import { resolveWithCache, type Filters } from "./filterResultsCache.ts";
+    import {
+      buildCacheIdentifiers,
+      canonicalJson,
+      cryptoShuffle,
+      resolveWithCache,
+      type Filters,
+      type PoolRotationResult,
+      type CacheLookupResult,
+    } from "./filterResultsCache.ts";
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
@@ -489,8 +497,36 @@ function extractPlaceImageUrl(place: any): string | undefined {
   return undefined;
 }
 
+/**
+ * صمام أمان للتحقق من أن النص المستخرج يمثل ساعات عمل حقيقية.
+ * يمنع ظهور جمل مثل "ساعات العمل غير متوفرة" في واجهة المستخدم.
+ */
+function hasValidOpeningHours(value: unknown): boolean {
+  const hours = String(value || "").trim();
+  if (!hours) return false;
+
+  // قائمة بالأنماط غير الصالحة التي يجب رفضها[cite: 6, 7]
+  const invalidPatterns = [
+    /تحقق\s*من\s*ساعات\s*العمل/i,
+    /check\s*opening\s*hours/i,
+    /ساعات\s*العمل\s*غير\s*متوفرة/i,
+    /unknown/i,
+    /n\/a/i,
+    /غير\s*متوفر/i,
+    /غير\s*معروف/i
+  ];
+
+  // إذا طابق النص أي نمط من القائمة، نعتبره غير صالح[cite: 6, 7]
+  return !invalidPatterns.some((pattern) => pattern.test(hours));
+}
+
+/**
+ * الدالة الرئيسية لاستخراج وتنسيق ساعات العمل من مصادر بيانات متنوعة.
+ */
 function extractPlaceOpeningHours(place: any, targetDate?: string): string | undefined {
   if (!place || typeof place !== "object") return undefined;
+
+  // قائمة الحقول المرشحة التي قد تحتوي على توقيت العمل
   const candidates = [
     place?.operating_hours,
     place?.openingHours,
@@ -505,36 +541,54 @@ function extractPlaceOpeningHours(place: any, targetDate?: string): string | und
     place?.businessHours,
     place?.weekdayText,
     place?.weekday_text,
-    // SerpAPI Google Maps search/place payloads expose these directly:
-    // open_state: "Open · Closes 11 PM" and hours: "Open · Closes 11 PM".
+    // حقول SerpAPI المباشرة
     place?.open_state,
     place?.openState,
-    // Some SerpAPI rich responses nest hours inside a `place_details` block
+    // حقول التفاصيل العميقة
     place?.place_details?.hours,
     place?.place_details?.opening_hours,
     place?.place_results?.operating_hours,
     place?.place_results?.hours,
     place?.place_results?.open_state,
-    // Apify / scraper outputs
+    // مخرجات أدوات الكشط (Scrapers)
     place?.openingHoursText,
     place?.openHours,
   ];
 
   for (const candidate of candidates) {
     if (candidate == null) continue;
+
+    // محاولة التنسيق بناءً على تاريخ محدد أو بشكل عام[cite: 7]
     const formatted = targetDate
       ? formatOperatingHoursForDate(candidate, targetDate)
       : formatOperatingHoursToString(candidate);
+
+    // التحقق من صلاحية التوقيت المنسق قبل إرجاعه[cite: 7]
     if (formatted && hasValidOpeningHours(formatted)) return formatted;
   }
 
-  // Final pass: try to scrape any string field that mentions a time range.
-  const stringFields = [place?.snippet, place?.description, place?.subtitle, place?.status, place?.openClose];
+  // محاولة أخيرة: البحث عن أنماط الوقت داخل النصوص الوصفية إذا كانت الحقول السابقة فارغة[cite: 7]
+  const stringFields = [
+    place?.snippet,
+    place?.description,
+    place?.subtitle,
+    place?.status,
+    place?.openClose,
+  ];
+
   for (const field of stringFields) {
     if (typeof field !== "string") continue;
-    const m = field.match(/\b(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm|ص|م)?)\s*[-–—~]\s*(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm|ص|م)?)/);
+
+    // البحث عن نمط الوقت (مثل 09:00 ص - 05:00 م)[cite: 7]
+    const m = field.match(
+      /\b(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm|ص|م)?)\s*[-–—~]\s*(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm|ص|م)?)/
+    );
     if (m) return `${m[1]} – ${m[2]}`;
-    if (/24\s*\/?\s*7|open\s*24|24\s*hours|مفتوح\s*24/i.test(field)) return "Open 24 hours";
+
+    // التحقق من الأماكن المفتوحة 24 ساعة[cite: 7]
+    if (/24\s*\/?\s*7|open\s*24|24\s*hours|مفتوح\s*24/i.test(field)) {
+      return "Open 24 hours";
+    }
   }
 
   return undefined;
@@ -10039,6 +10093,7 @@ async function fetchHotelsForCity(
   checkOut: string,
   prefs: BookingPrefs,
   limit = 6,
+  currentUserId?: string | null,   // ← NEW optional parameter
 ): Promise<any[]> {
   try {
     // Map accommodationType to SerpAPI Google Hotels filters
@@ -10058,7 +10113,7 @@ async function fetchHotelsForCity(
     } else {
       queryWithType = `hotels in ${city}`;
     }
-
+ 
     const body: any = {
       query: queryWithType,
       check_in_date: checkIn,
@@ -10067,17 +10122,26 @@ async function fetchHotelsForCity(
       children: prefs.children || 0,
       currency: prefs.currency || "USD",
     };
-    if (prefs.maxBudgetPerNight && prefs.maxBudgetPerNight > 0) body.max_price = prefs.maxBudgetPerNight;
-    if (prefs.hotelStarRating && prefs.hotelStarRating > 0) body.hotel_class = String(prefs.hotelStarRating);
+    if (prefs.maxBudgetPerNight && prefs.maxBudgetPerNight > 0)
+      body.max_price = prefs.maxBudgetPerNight;
+    if (prefs.hotelStarRating && prefs.hotelStarRating > 0)
+      body.hotel_class = String(prefs.hotelStarRating);
     if (vacationRentals) body.vacation_rentals = true;
-
+ 
+    // Build request headers — forward the real user's ID so pool rotation
+    // inside serpapi-hotels stays consistent with the rest of the itinerary.
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${serviceKey}`,
+      "apikey": serviceKey,
+    };
+    if (currentUserId) {
+      headers["x-user-id"] = currentUserId;
+    }
+ 
     const resp = await fetch(`${supabaseUrl}/functions/v1/serpapi-hotels`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${serviceKey}`,
-        "apikey": serviceKey,
-      },
+      headers,
       body: JSON.stringify(body),
     });
     if (!resp.ok) {
@@ -10133,19 +10197,31 @@ async function fetchFlightsBetweenCities(
   date: string,
   prefs: BookingPrefs,
   limit = 6,
+  currentUserId?: string | null,   // ← NEW optional parameter
 ): Promise<any[]> {
   try {
     const fromIata = resolveIataFallback(fromCity);
     const toIata = resolveIataFallback(toCity);
-    if (!fromIata || !toIata || fromIata === toIata || fromIata === "XXX" || toIata === "XXX") return [];
-
+    if (
+      !fromIata || !toIata ||
+      fromIata === toIata ||
+      fromIata === "XXX" || toIata === "XXX"
+    ) return [];
+ 
+    // Build request headers — forward the real user's ID so pool rotation
+    // inside serpapi-flights stays consistent with the rest of the itinerary.
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${serviceKey}`,
+      "apikey": serviceKey,
+    };
+    if (currentUserId) {
+      headers["x-user-id"] = currentUserId;
+    }
+ 
     const resp = await fetch(`${supabaseUrl}/functions/v1/serpapi-flights`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${serviceKey}`,
-        "apikey": serviceKey,
-      },
+      headers,
       body: JSON.stringify({
         departure_id: fromIata,
         arrival_id: toIata,
@@ -10155,7 +10231,7 @@ async function fetchFlightsBetweenCities(
         type: "2",
       }),
     });
-
+ 
     const fallbackOne = [{
       from: fromCity, to: toCity, fromCode: fromIata, toCode: toIata, date,
       bookingUrl: buildFlightBookingUrl(fromIata, toIata, date),
@@ -10163,21 +10239,24 @@ async function fetchFlightsBetweenCities(
     }];
     if (!resp.ok) return fallbackOne;
     const data = await resp.json();
-    const flights = [...(data?.best_flights || []), ...(data?.other_flights || [])];
+    const flights = [
+      ...(Array.isArray(data?.best_flights) ? data.best_flights : []),
+      ...(Array.isArray(data?.other_flights) ? data.other_flights : []),
+    ];
     if (flights.length === 0) return fallbackOne;
-
+ 
     const maxBudget = prefs.maxBudgetPerFlight || 0;
     const filtered = maxBudget > 0
       ? flights.filter((f: any) => !f.price || f.price <= maxBudget)
       : flights;
     const candidates = filtered.length > 0 ? filtered : flights;
-
+ 
     candidates.sort((a: any, b: any) => {
       const sa = (a.stops || 0) - (b.stops || 0);
       if (sa !== 0) return sa;
       return (a.price || 0) - (b.price || 0);
     });
-
+ 
     return candidates.slice(0, limit).map((best: any) =>
       mapFlight(best, fromCity, toCity, fromIata, toIata, date, prefs)
     );
@@ -10194,6 +10273,7 @@ async function enrichItineraryWithBookings(
   primaryDestination: string,
   departureCity?: string,
   finalArrivalCity?: string,
+  currentUserId?: string | null,   // ← NEW optional parameter
 ): Promise<void> {
   const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
   const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -10202,18 +10282,18 @@ async function enrichItineraryWithBookings(
     return;
   }
   if (!prefs.wantHotel && !prefs.wantFlight) return;
-
+ 
   const startDate = new Date(prefs.startDate);
   if (isNaN(startDate.getTime())) return;
-
+ 
   const legs = resolvedCityLegs.length > 0
     ? resolvedCityLegs
     : [{ city: primaryDestination, days: itinerary.days?.length || 1, transport: "flight" }];
-
+ 
   const hotels: any[] = [];
   const flights: any[] = [];
   const tasks: Promise<void>[] = [];
-
+ 
   if (prefs.wantHotel) {
     let dayCursor = 0;
     for (let i = 0; i < legs.length; i++) {
@@ -10226,7 +10306,7 @@ async function enrichItineraryWithBookings(
       const co = checkOut.toISOString().split("T")[0];
       tasks.push(
         Promise.race([
-          fetchHotelsForCity(SUPABASE_URL, SERVICE_KEY, leg.city, ci, co, prefs, 6),
+          fetchHotelsForCity(SUPABASE_URL, SERVICE_KEY, leg.city, ci, co, prefs, 6, currentUserId),
           new Promise<any[]>((r) => setTimeout(() => r([]), 12000)),
         ]).then((cityHotels) => {
           if (Array.isArray(cityHotels) && cityHotels.length > 0) {
@@ -10237,13 +10317,13 @@ async function enrichItineraryWithBookings(
       dayCursor += leg.days;
     }
   }
-
+ 
   if (prefs.wantFlight) {
     if (departureCity && legs[0]?.city) {
       const fd = startDate.toISOString().split("T")[0];
       tasks.push(
         Promise.race([
-          fetchFlightsBetweenCities(SUPABASE_URL, SERVICE_KEY, departureCity, legs[0].city, fd, prefs, 6),
+          fetchFlightsBetweenCities(SUPABASE_URL, SERVICE_KEY, departureCity, legs[0].city, fd, prefs, 6, currentUserId),
           new Promise<any[]>((r) => setTimeout(() => r([]), 12000)),
         ]).then((legFlights) => {
           if (Array.isArray(legFlights)) {
@@ -10252,7 +10332,7 @@ async function enrichItineraryWithBookings(
         }),
       );
     }
-
+ 
     let dayCursor = 0;
     for (let i = 0; i < legs.length - 1; i++) {
       const fromLeg = legs[i];
@@ -10265,7 +10345,7 @@ async function enrichItineraryWithBookings(
       if (!transport.includes("flight")) continue;
       tasks.push(
         Promise.race([
-          fetchFlightsBetweenCities(SUPABASE_URL, SERVICE_KEY, fromLeg.city, toLeg.city, fd, prefs, 4),
+          fetchFlightsBetweenCities(SUPABASE_URL, SERVICE_KEY, fromLeg.city, toLeg.city, fd, prefs, 4, currentUserId),
           new Promise<any[]>((r) => setTimeout(() => r([]), 12000)),
         ]).then((legFlights) => {
           if (Array.isArray(legFlights)) {
@@ -10274,8 +10354,8 @@ async function enrichItineraryWithBookings(
         }),
       );
     }
-
-    // Return flight: last city → finalArrivalCity (or back to origin if not provided)
+ 
+    // Return flight: last city → finalArrivalCity (or back to origin)
     if (legs.length > 0) {
       const lastLeg = legs[legs.length - 1];
       const returnTarget = (finalArrivalCity && finalArrivalCity.trim()) || departureCity;
@@ -10287,7 +10367,7 @@ async function enrichItineraryWithBookings(
         if (lastLeg.city.toLowerCase().trim() !== String(returnTarget).toLowerCase().trim()) {
           tasks.push(
             Promise.race([
-              fetchFlightsBetweenCities(SUPABASE_URL, SERVICE_KEY, lastLeg.city, returnTarget, rd, prefs, 4),
+              fetchFlightsBetweenCities(SUPABASE_URL, SERVICE_KEY, lastLeg.city, returnTarget, rd, prefs, 4, currentUserId),
               new Promise<any[]>((r) => setTimeout(() => r([]), 12000)),
             ]).then((legFlights) => {
               if (Array.isArray(legFlights)) {
@@ -10299,9 +10379,9 @@ async function enrichItineraryWithBookings(
       }
     }
   }
-
+ 
   await Promise.all(tasks);
-
+ 
   if (prefs.wantHotel) {
     itinerary.suggestedHotels = hotels.filter(Boolean);
     if (!Array.isArray(itinerary.selectedHotels)) itinerary.selectedHotels = [];
@@ -10310,7 +10390,10 @@ async function enrichItineraryWithBookings(
     itinerary.suggestedFlights = flights.filter(Boolean);
     if (!Array.isArray(itinerary.selectedFlights)) itinerary.selectedFlights = [];
   }
-  console.log(`Booking enrichment: ${itinerary.suggestedHotels?.length || 0} hotel suggestions, ${itinerary.suggestedFlights?.length || 0} flight suggestions`);
+  console.log(
+    `Booking enrichment: ${itinerary.suggestedHotels?.length || 0} hotel suggestions, ` +
+    `${itinerary.suggestedFlights?.length || 0} flight suggestions`,
+  );
 }
 
 // أضف هذا السطر في أعلى الملف مع باقي الـ imports
@@ -10334,14 +10417,15 @@ import {
 Deno.serve(async (req: Request) => {
   // ── CORS pre-flight ────────────────────────────────────────────────────────
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
-
+ console.log("TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT");
+ 
   let requestData: any = {};
   let __tripFingerprint = "";
   let __generationSucceeded = false;
-
+ 
   try {
     requestData = await req.json();
-
+ 
     const {
       destination,
       departureCity,
@@ -10355,10 +10439,10 @@ Deno.serve(async (req: Request) => {
       cuisineTypes,
       regenMode,
     } = requestData;
-
+ 
     const authHeader = req.headers.get("authorization");
     const currentUserId = getUserIdFromAuthHeader(authHeader);
-
+ 
     // ── 1. Progress + Recovery setup ──────────────────────────────────────────
     __tripFingerprint = __buildTripRecoveryFingerprint(requestData);
     resetSerpRequestState(
@@ -10369,7 +10453,7 @@ Deno.serve(async (req: Request) => {
     );
     setProgressToken((requestData as any)?.progressToken);
     emitProgress("prepare", 5, "request_received");
-
+ 
     // ── 2. "activity regen" fast path (unchanged from original) ───────────────
     if (regenMode === "activity") {
       emitProgress("generate", 30, "regen_activity");
@@ -10377,22 +10461,22 @@ Deno.serve(async (req: Request) => {
       emitProgress("save", 100, "ready");
       return jsonResponse(result);
     }
-
+ 
     // ── 3. Build normalised Filters for deterministic cache-key ───────────────
     //
-    //  Rules for what goes into subApiFilters:
+    //  Rules:
     //    ✓ Include semantically meaningful trip parameters.
     //    ✗ Exclude ephemeral / UX-only fields:
     //        progressToken, variationSeed, guestId, regenMode, lang, …
     //
     const subApiFilters: Filters = {
-      destination:       destination,
-      duration:          duration ?? null,
-      // Sort arrays so {"interests":["art","food"]} ≡ {"interests":["food","art"]}
-      interests:         [...(Array.isArray(interests) ? interests : [])].sort(),
-      cuisineTypes:      [...(Array.isArray(cuisineTypes) ? cuisineTypes : [])].sort(),
-      tripType:          requestData.tripType ?? null,
-      activitiesPerDay:  requestData.activitiesPerDay ?? requestData.maxActivitiesPerDay ?? null,
+      destination:      destination,
+      duration:         duration ?? null,
+      // Sort arrays so {interests:["art","food"]} ≡ {interests:["food","art"]}
+      interests:        [...(Array.isArray(interests) ? interests : [])].sort(),
+      cuisineTypes:     [...(Array.isArray(cuisineTypes) ? cuisineTypes : [])].sort(),
+      tripType:         requestData.tripType ?? null,
+      activitiesPerDay: requestData.activitiesPerDay ?? requestData.maxActivitiesPerDay ?? null,
       meals: {
         breakfast: !!(requestData.wantBreakfast ?? requestData.mealPreferences?.breakfast),
         lunch:     !!(requestData.wantLunch     ?? requestData.mealPreferences?.lunch),
@@ -10404,26 +10488,14 @@ Deno.serve(async (req: Request) => {
         ? requestData.cities.map((c: any) => ({ name: c.name, days: c.days }))
         : [],
     };
-
-    // How many items the trip pipeline needs per request.
-    // activitiesPerDay × duration gives an upper bound; pool rotation uses
-    // DEFAULT_PAGE_SIZE (5) by default but respects the caller's request.
+ 
     const activitiesPerDay: number =
       Number(requestData.activitiesPerDay ?? requestData.maxActivitiesPerDay) || 5;
     const pageSize = activitiesPerDay;
-
+ 
     // ── 4. Resolve pool (Stateful Pool Rotation) ───────────────────────────────
-    //
-    //  fetcher()  is called only when:
-    //    a) No shared pool exists yet for these filters  (pool miss)
-    //    b) This user has already seen all items in the pool (pool exhausted)
-    //
-    //  In all other cases the user is served unseen items from the DB pool.
-    //
     const fetcher = async (): Promise<unknown[]> => {
       emitProgress("generate", 18, "calling_sub_api");
-      // `buildDynamicCityData` is the original function that calls SerpAPI /
-      // AI to produce the full ~25-item pool for a destination.
       const pool = await buildDynamicCityData(
         destination,
         Array.isArray(cuisineTypes) && cuisineTypes.length > 0 ? cuisineTypes[0] : undefined,
@@ -10431,11 +10503,11 @@ Deno.serve(async (req: Request) => {
       );
       return Array.isArray(pool) ? pool : [];
     };
-
+ 
     emitProgress("prepare", 10, "checking_pool");
-
+ 
     let cacheResult: PoolRotationResult<unknown>;
-
+ 
     if (currentUserId) {
       cacheResult = await resolveWithCache<unknown>(subApiFilters, currentUserId, fetcher, { pageSize });
     } else {
@@ -10448,7 +10520,7 @@ Deno.serve(async (req: Request) => {
         filtersHash: "",
       };
     }
-
+ 
     console.log(
       `[PoolRotation] source=${cacheResult.source} ` +
       `user=${currentUserId?.slice(0, 8) ?? "guest"} ` +
@@ -10456,26 +10528,22 @@ Deno.serve(async (req: Request) => {
       `items=${cacheResult.items.length} ` +
       `remaining=${cacheResult.remainingUnseen}`,
     );
-
+ 
     emitProgress("generate", 30, "building_itinerary");
-
+ 
     // ── 5. Build the full itinerary using the page of results ──────────────────
-    //
-    //  `cacheResult.items` is the current page of unseen, cryptoShuffled items.
-    //  Pass them into createFallbackItinerary / the main generation pipeline
-    //  exactly as `dynamicCityData` was used before.
-    //
     const preferenceFlags = extractPreferences(interests, additionalPreferences, cuisineTypes);
-
+ 
     let finalItinerary = await createFallbackItinerary({
       ...requestData,
       dynamicCityData: cacheResult.items,
       preferenceFlags,
     });
-
+ 
     emitProgress("enrich", 65, "enriching_activities");
-
+ 
     // ── 6. Booking enrichment (hotels + flights) ───────────────────────────────
+    //       Now forwards currentUserId so pool rotation works per-user.
     const bookingPrefs: BookingPrefs = {
       wantHotel:          !!(requestData.wantHotel),
       wantFlight:         !!(requestData.wantFlight),
@@ -10490,7 +10558,7 @@ Deno.serve(async (req: Request) => {
       startDate:          startDate || "",
       endDate:            endDate,
     };
-
+ 
     if (!shouldUseActivitiesOnlyMode(interests, additionalPreferences)) {
       await enrichItineraryWithBookings(
         finalItinerary,
@@ -10499,28 +10567,27 @@ Deno.serve(async (req: Request) => {
         destination,
         departureCity,
         finalArrivalCity,
+        currentUserId,   // ← forwarded so x-user-id header is set on sub-API calls
       );
     }
-
+ 
     // ── 7. Success — persist recovery snapshot and respond ────────────────────
     __generationSucceeded = true;
     if (__tripFingerprint) __writeTripRecoveryCache(__tripFingerprint, finalItinerary).catch(() => {});
-
+ 
     emitProgress("save", 100, "ready");
-
+ 
     return jsonResponse({
       ...finalItinerary,
-      // Expose cache metadata so the frontend can surface "new results" vs
-      // "from your personalised pool" messaging if desired.
-      _cacheSource:    cacheResult.source,
+      // Expose cache metadata so the frontend can surface messaging if desired.
+      _cacheSource:     cacheResult.source,
       _remainingUnseen: cacheResult.remainingUnseen,
     });
-
+ 
   } catch (err) {
     console.error("[generate-trip] unhandled error:", String(err));
-
-    // Last-resort: try to serve the most recent successful snapshot for this
-    // exact trip configuration so the user is never left with a blank screen.
+ 
+    // Last-resort: try to serve the most recent successful snapshot.
     if (__tripFingerprint && !__generationSucceeded) {
       try {
         const recovered = await __readTripRecoveryCache(__tripFingerprint);
@@ -10530,7 +10597,8 @@ Deno.serve(async (req: Request) => {
         }
       } catch { /* noop */ }
     }
-
+ 
     return jsonResponse({ error: String(err) }, 500);
   }
 });
+ 

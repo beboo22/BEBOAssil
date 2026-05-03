@@ -1,37 +1,66 @@
 /**
- * filterResultsCache.ts  —  Stateful Pool Rotation Cache
+ * filterResultsCache.ts  —  Stateful Pool Rotation Cache  (v2)
  * ─────────────────────────────────────────────────────────────────────────────
- * Implements a three-tier, per-user rotation system for Sub-API call results.
  *
  * ARCHITECTURE
  * ────────────
  *  Shared Pool Table  (filter_results_cache)
- *    One row per unique `filters_hash`.  Stores the FULL ~25-item pool returned
- *    by the Sub-API.  Any user's call can seed it; it is reused by all users.
+ *    One row per unique `filters_hash` (SHA-256 of canonical JSON of filters).
+ *    Stores the FULL ~25-item pool returned by the Sub-API.
+ *    Any user's call can seed it; all users share it.
  *
  *  Per-User Cursor Table  (filter_results_user_cursors)
  *    One row per (filters_hash, user_id) pair.
- *    Tracks which pool-item IDs the user has already been shown.
+ *    Tracks the indices into pool_data the user has already been shown.
  *
  * ROTATION RULES
  * ──────────────
- *  1. Pool MISS (nobody has fetched these filters yet)
- *     → Call Sub-API, store full pool, serve first PAGE_SIZE items to this user,
- *       mark those items as seen in their cursor row.
+ *  1. Pool MISS  (nobody has fetched these filters yet)
+ *     → Call Sub-API, store full pool, serve first PAGE_SIZE items,
+ *       mark them as seen in this user's cursor row.
  *
  *  2. Pool HIT — user has unseen items remaining
- *     → Serve the next PAGE_SIZE unseen items (cryptoShuffled), update cursor.
+ *     → cryptoShuffle the unseen indices, take PAGE_SIZE, update cursor.
  *
- *  3. Pool HIT — user has seen everything
- *     → Call Sub-API for a fresh pool, replace the shared pool, reset cursor,
+ *  3. Pool HIT — user has seen all items (pool exhausted for this user)
+ *     → Call Sub-API for a fresh pool, replace shared pool, reset cursor,
  *       serve first PAGE_SIZE items.
  *
  *  4. Cross-user diversity
- *     → Each user has an independent cursor, so User B's first page is a
+ *     → Each user has an independent cursor so User B's first page is a
  *       cryptoShuffled subset that does NOT follow the same path as User A's.
  *
- * PAGE_SIZE is configurable (default 5) so the caller can request as many or
- * as few items as the trip-generation pipeline needs per day.
+ * PAGE_SIZE is configurable (default 5).
+ *
+ * SQL (run once in Supabase SQL editor):
+ * ───────────────────────────────────────
+ *  -- Shared pool table
+ *  CREATE TABLE IF NOT EXISTS filter_results_cache (
+ *    id               bigserial PRIMARY KEY,
+ *    filters_hash     text        NOT NULL UNIQUE,
+ *    owner_user_id    uuid,
+ *    filters_payload  jsonb,
+ *    pool_data        jsonb       NOT NULL DEFAULT '[]',
+ *    result_data      jsonb       NOT NULL DEFAULT '[]',  -- compat: first 5 items
+ *    expires_at       timestamptz NOT NULL,
+ *    created_at       timestamptz NOT NULL DEFAULT now(),
+ *    last_refreshed_at timestamptz NOT NULL DEFAULT now(),
+ *    last_accessed_at  timestamptz NOT NULL DEFAULT now()
+ *  );
+ *  CREATE INDEX IF NOT EXISTS idx_frc_hash ON filter_results_cache(filters_hash);
+ *
+ *  -- Per-user cursor table
+ *  CREATE TABLE IF NOT EXISTS filter_results_user_cursors (
+ *    id              bigserial PRIMARY KEY,
+ *    filters_hash    text        NOT NULL,
+ *    user_id         uuid        NOT NULL,
+ *    seen_indices    integer[]   NOT NULL DEFAULT '{}',
+ *    expires_at      timestamptz NOT NULL,
+ *    last_accessed_at timestamptz NOT NULL DEFAULT now(),
+ *    UNIQUE(filters_hash, user_id)
+ *  );
+ *  CREATE INDEX IF NOT EXISTS idx_fruc_hash_user
+ *    ON filter_results_user_cursors(filters_hash, user_id);
  */
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -39,28 +68,34 @@
 export type Filters = Record<string, unknown>;
 
 export type CacheSource =
-  | "fresh_pool_miss"      // Sub-API called; new pool created
-  | "fresh_pool_exhausted" // Sub-API called; user exhausted previous pool
-  | "pool_rotation"        // served from pool — user had unseen items
-  | "fallback_direct";     // cache layer errored; direct Sub-API call
+  | "fresh_pool_miss"       // Sub-API called; new pool created (no prior pool)
+  | "fresh_pool_exhausted"  // Sub-API called; user exhausted previous pool
+  | "pool_rotation"         // Served from existing pool — user had unseen items
+  | "fallback_direct";      // Cache layer errored; direct Sub-API call
 
 export interface PoolRotationResult<T = unknown> {
+  /** Where the items came from. */
   source: CacheSource;
+  /** The current page of items (up to PAGE_SIZE). */
   items: T[];
-  /** How many items remain unseen in the pool after this response */
+  /** How many items remain unseen in the pool after this response. */
   remainingUnseen: number;
+  /** SHA-256 hex of the canonical filters JSON (useful for client-side dedup). */
   filtersHash: string;
 }
 
+// Backward-compat alias — old code that imported CacheLookupResult still compiles.
+export type CacheLookupResult<T = unknown> = PoolRotationResult<T>;
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-/** How many items to serve per request (one "page"). */
+/** Items to serve per request ("one page"). */
 const DEFAULT_PAGE_SIZE = 5;
 
-/** Pool TTL: 7 days (same as the original cache). */
+/** Pool TTL: 7 days. */
 const POOL_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
-/** Cursor TTL: 30 days — we want long memory of what the user has seen. */
+/** Cursor TTL: 30 days — long memory of what each user has seen. */
 const CURSOR_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 // ─── Crypto Helpers ──────────────────────────────────────────────────────────
@@ -178,19 +213,18 @@ async function upsertPool(
   const now = new Date();
   const body = {
     filters_hash: filtersHash,
-    // Keep backward-compat columns from the original schema.
     owner_user_id: ownerUserId,
     filters_payload: filtersPayload,
-    // NEW: full pool stored here.
     pool_data: poolData,
-    // Keep result_data as first PAGE_SIZE items for backward compat.
+    // Backward-compat: keep result_data as first PAGE_SIZE items.
     result_data: poolData.slice(0, DEFAULT_PAGE_SIZE),
     expires_at: new Date(now.getTime() + POOL_TTL_MS).toISOString(),
     last_refreshed_at: now.toISOString(),
     last_accessed_at: now.toISOString(),
   };
   await fetch(
-    `${supabaseUrl}/rest/v1/filter_results_cache?on_conflict=filters_hash&resolution=merge-duplicates`,
+    `${supabaseUrl}/rest/v1/filter_results_cache` +
+      `?on_conflict=filters_hash&resolution=merge-duplicates`,
     {
       method: "POST",
       headers: supabaseHeaders(serviceKey),
@@ -205,7 +239,7 @@ interface CursorRow {
   id: number;
   filters_hash: string;
   user_id: string;
-  seen_indices: number[]; // indices into pool_data that this user has already seen
+  seen_indices: number[];
   expires_at: string;
 }
 
@@ -277,7 +311,7 @@ function pickUnseenPage<T>(
     .map((_, i) => i)
     .filter((i) => !seenSet.has(i));
 
-  // cryptoShuffle so two concurrent users see a different order.
+  // cryptoShuffle so concurrent users see a different order.
   const shuffledUnseen = cryptoShuffle(unseenIndices);
   const pickedIndices = shuffledUnseen.slice(0, pageSize);
   const page = pickedIndices.map((i) => pool[i]);
@@ -289,15 +323,15 @@ function pickUnseenPage<T>(
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /**
- * Main entry point.  Resolves a "page" of results using the Stateful Pool
+ * Main entry point. Resolves a "page" of results using the Stateful Pool
  * Rotation strategy.
  *
  * @param filters   Normalised filter payload (key order doesn't matter).
  * @param userId    Authenticated user UUID. Pass null for guests (always fresh).
  * @param fetcher   Callback that calls the Sub-API and returns the FULL pool
- *                  (~25 items). Only invoked when the pool is missing or
+ *                  (~20-25 items). Only invoked when the pool is missing or
  *                  exhausted for this user.
- * @param opts      Optional overrides for testing and configuration.
+ * @param opts      Optional overrides.
  */
 export async function resolveWithCache<T = unknown>(
   filters: Filters,
@@ -347,8 +381,11 @@ export async function resolveWithCache<T = unknown>(
     let pool: T[];
     let cacheSource: CacheSource;
 
-    const poolExists = poolRow !== null && Array.isArray(poolRow.pool_data) && poolRow.pool_data.length > 0;
-    const seenAll = poolExists && seenIndices.length >= (poolRow!.pool_data.length);
+    const poolExists =
+      poolRow !== null &&
+      Array.isArray(poolRow.pool_data) &&
+      poolRow.pool_data.length > 0;
+    const seenAll = poolExists && seenIndices.length >= poolRow!.pool_data.length;
 
     if (!poolExists || seenAll) {
       // Pool is missing or this user has exhausted it → fetch fresh.
@@ -359,7 +396,7 @@ export async function resolveWithCache<T = unknown>(
       const freshPool = await fetcher();
       pool = freshPool;
 
-      // Persist the new pool (fire-and-forget OK for pool write).
+      // Persist the new pool (fire-and-forget).
       upsertPool(supabaseUrl, serviceKey, filtersHash, userId, filters, freshPool).catch(() => {});
 
       // Reset cursor since this is a fresh pool.
@@ -377,14 +414,13 @@ export async function resolveWithCache<T = unknown>(
 
     console.log(
       `[PoolRotation] pool_rotation — user=${userId.slice(0, 8)} hash=${filtersHash.slice(0, 12)} ` +
-      `seen=${seenIndices.length}/${pool.length} serving=${page.length} remaining=${remainingUnseen}`,
+        `seen=${seenIndices.length}/${pool.length} serving=${page.length} remaining=${remainingUnseen}`,
     );
 
     // Persist updated cursor (fire-and-forget).
     upsertCursor(supabaseUrl, serviceKey, filtersHash, userId, newSeenIndices).catch(() => {});
 
     return { source: cacheSource, items: page, remainingUnseen, filtersHash };
-
   } catch (err) {
     // The cache layer must NEVER crash the main pipeline.
     console.warn("[PoolRotation] error — falling back to direct Sub-API call:", String(err));
@@ -398,8 +434,3 @@ export async function resolveWithCache<T = unknown>(
     };
   }
 }
-
-// ─── Backward-compatible alias ────────────────────────────────────────────────
-// Legacy callers that imported `CacheLookupResult` can keep working.
-
-export type CacheLookupResult<T = unknown> = PoolRotationResult<T>;
